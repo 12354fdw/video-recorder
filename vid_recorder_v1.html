@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+
+<html lang="en-us">
+    <header>
+        <title>Video Recorder</title>
+    </header>
+<body>
+    <button id="start">Start Recording</button>
+    <button id="stop" disabled>Stop Recording</button>
+    microphone:
+    <input type="checkbox" id="mic"></input>
+    Recording type: 
+    <select id="type">
+        <option value="video/mp4">MP4</option>
+        <option value="video/webm">WebM</option>
+        <option value="video/quicktime">MOV</option>
+    </select>
+    Resolution: 
+    <select id="res">
+        <option value="192x144">144p</option>
+        <option value="426x240">240p</option>
+        <option value="480x360">360p</option>
+        <option value="640x480">480p</option>
+        <option value="1280x720">720p</option>
+        <option value="1920x1080">1080p</option>
+        <option value="2560x1440">1440p</option>
+        <option value="3840x2160">4K</option>
+    </select>
+    <button id="download" disabled>Download</button>
+    <span id="size">Size: 0 bytes</span>
+    <p>NOTE: WINDOW OR ENTIRE SCREEN'S AUDIO CAN'T BE RECORDED WHILE TABS CAN BE RECORDED.</p>
+    <p>NOTE: IT ONLY WORKS IN CHROME AND EDGE.</p>
+    <p>NOTE: IF YOU ARE RECORDING SOMETHING WITH AUDIO, MICROPHONE AUDIO WILL NOT WORK!</p>
+    <video id="preview" controls autoplay muted></video>
+
+    <script>        const startButton = document.getElementById('start');
+        const stopButton = document.getElementById('stop');
+        const downloadButton = document.getElementById('download');
+        const typeSelect = document.getElementById('type');
+        const preview = document.getElementById('preview');
+        const sizeSpan = document.getElementById('size');
+        const res = document.getElementById('res');
+        const mic = document.getElementById('mic');
+        let errorFlag = false;
+        let mediaRecorder;
+        let recordedChunks = [];
+        let blob;
+        let url;
+        let stream;
+        let screenStream;
+        let micStream;
+    
+        function formatBytes(bytes, decimals = 2) {
+            if (bytes === 0) return '0 Bytes';
+    
+            const k = 1024;
+            const dm = decimals < 0 ? 0 : decimals;
+            const sizes = ['Bytes', 'KB', 'MB', 'GB', 'TB', 'PB', 'EB', 'ZB', 'YB'];
+    
+            const i = Math.floor(Math.log(bytes) / Math.log(k));
+    
+            return parseFloat((bytes / Math.pow(k, i)).toFixed(dm)) + ' ' + sizes[i];
+        };
+        async function stopRec() {
+            await mediaRecorder.stop()
+            preview.control = true;
+            preview.muted = false;
+            preview.autoplay = false;
+            console.log(`recorder stopped`);
+            console.log(`MediaRecorder state: ${mediaRecorder.state}`);
+            screenStream.getTracks()
+                .forEach(track => track.stop());
+            if (mic.checked) {
+                micStream.getTracks()
+                    .forEach(track => track.stop());
+            }
+            console.log(`track stopped`);
+            mediaRecorder.onstop = async (event) => {
+                if (!errorFlag) {
+                    console.log(`onstop triggered`);
+                startButton.disabled = false;
+                stopButton.disabled = true;
+                downloadButton.disabled = false;
+                console.log(`Awaiting new blob creation`);
+                blob = await new Blob(recordedChunks, {
+                    type: typeSelect.nodeValue
+                });
+                console.log(`Blob creation done`);
+                console.log(`Blob size: ${blob.size}`);
+                console.log(`Creatting url`);
+                url = await getURL(blob);
+                console.log(`URL: ${url}`);
+                console.log(`Displaying`);
+                preview.srcObject = null;
+                preview.src = null;
+                preview.src = url;
+                } else {
+                    console.error("ErrorFlag was true, stopping process");
+                    errorFlag = false;
+                }
+            };
+        };
+
+        async function startRec() {
+            recordedChunks = [];
+            preview.control = false;
+            preview.muted = true;
+            preview.autoplay = true;
+            console.log(`Res to record: ${res.options[res.selectedIndex].value}`);
+            console.log(`Awaiting nav.mediaDev.getDisplayMed`);
+            let width = res.options[res.selectedIndex].value.split("x")[0];
+            let height = res.options[res.selectedIndex].value.split("x")[1];
+            let aspectRatio = width / height;
+            let frameRate = 60;
+            let videoBitrate = width * height * frameRate;
+            if (mic.checked) {
+                    console.log(`Awaiting for microphone to be allowed`);
+                    micStream = await navigator.mediaDevices.getUserMedia(
+                        {
+                            audio: {
+                                bitRate: videoBitrate,
+                                sampleRate: 44100,
+                                noiseSuppression: true
+                            }
+                        });
+                };
+            screenStream = await navigator.mediaDevices.getDisplayMedia(
+                {
+                    video: {
+                        width: {ideal: width},
+                        height: {ideal: height},
+                        frameRate: {ideal: frameRate},
+                        aspectRatio: {ideal: aspectRatio},
+                        bitRate: {ideal: videoBitrate},
+                    },
+                    audio: {
+                        bitRate: videoBitrate,
+                        sampleRate: 44100,
+                        noiseSuppression: true,
+                        echoCancellation: true
+                    }
+                });
+                let tracks;
+                if (mic.checked) {
+                    tracks = [...screenStream.getTracks(), ...micStream.getAudioTracks()];
+                } else {
+                    tracks = [...screenStream.getTracks()]
+                }
+                stream = new MediaStream(tracks);
+                console.log(`Setting srcObject for preview`);
+                preview.srcObject = stream;
+                mediaRecorder = new MediaRecorder(stream);
+                mediaRecorder.ondataavailable = (e) => {
+                    console.log(`mediaRec.ondataavail triggered`)
+                    if (e.data.size > 0) {
+                        console.log(`e.data.size was more than 0, continuing`)
+                        console.log(`Pushing data to recorededChunks`)
+                        recordedChunks.push(e.data);
+                        sizeSpan.textContent = `Size: ${formatBytes(recordedChunks.reduce((total, chunk) => total + chunk.size, 0))}`;
+                        stopRec();
+                    } else {
+                        console.warn(`e.data.size was NOT more than 0, setting errorFlag to true`);
+                        errorFlag = true;
+                    }
+            };
+            mediaRecorder.start();
+            startButton.disabled = true;
+            stopButton.disabled = false;
+        };
+
+
+        startButton.addEventListener('click', async () => {
+            startRec()
+        });
+    
+        function getURL(b) {
+            try {
+                let es;
+                es = URL.createObjectURL(b);
+                return es
+            } catch (e) {
+                 console.warn(`getURL error: ${e}`);
+            }
+        };
+        stopButton.addEventListener('click', async () => {
+            stopRec();
+        });
+    
+        downloadButton.addEventListener('click', async () => {
+            console.log(`Downloading`);
+            console.log(`Creatting url`);
+            let a = document.createElement('a');
+            document.body.appendChild(a);
+            a.style = 'display: none';
+            console.log(`Setting href for download`);
+            a.href = url;
+            console.log(`Setting name for download`);
+            a.download = `NAME.${typeSelect.options[typeSelect.selectedIndex].text.toLowerCase()}`;
+            a.click();
+            window.URL.revokeObjectURL(url);
+        }); </script>
+
+  </body>
+</html>
